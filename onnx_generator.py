@@ -263,10 +263,22 @@ def make_Resize(op):
     # shape infer 
     input = helper.make_tensor_value_info(op["bottom"][0], TensorProto.FLOAT, None)
     input_shape = make_shape_infer(onnx_maker, input)
-    size_ = list(op["arg"][0].v_i)
+    
 
     # make scales tensor, make roi tensor
-    scale_np = np.array([1, 1, int(size_[0]/input_shape[2]), int(size_[1]/input_shape[3])],dtype=np.float32)
+    if(len(list(op["arg"][0].v_i)) == 2):   #use scale
+        size_ = list(op["arg"][0].v_i)
+        scale_np = np.array([1, 1, int(size_[0]/input_shape[2]), int(size_[1]/input_shape[3])],dtype=np.float32)
+    elif(op["arg"][0].s_i != 0):
+        size_ = [op["arg"][0].s_i]*2
+        exit(-1)
+    else:
+        if(len(list(op["arg"][1].v_f)) == 2):
+            scale_ = list(op["arg"][1].v_f)
+        elif(op["arg"][1].s_f != 0):
+            scale_ = [op["arg"][1].s_f]*2
+        scale_np = np.array([1, 1, scale_[0], scale_[1]],dtype=np.float32) 
+
     scales_tensor_name = "Scales_" + str(onnx_maker.infer_blob_idx)
     onnx_maker.infer_blob_idx += 1
     scales_tensor = helper.make_tensor(name=scales_tensor_name, data_type=TensorProto.DataType.FLOAT, dims=scale_np.shape, vals=scale_np)
@@ -290,18 +302,24 @@ def make_Resize(op):
 def make_Slice(op):
     tensor_slice_points = []
     tensor_slice_point_names = []
-    axis = op["arg"][0].s_i
-    slice_point = list(op["arg"][1].v_i)
     # shape infer 
     input = helper.make_tensor_value_info(op["bottom"][0], TensorProto.FLOAT, None)
     input_shape = make_shape_infer(onnx_maker, input)
 
+    axis = op["arg"][0].s_i
+    if(len(op["arg"])==2):
+        slice_point = list(op["arg"][1].v_i)
+    elif(len(op["arg"])==1):
+        out_num = len(op["top"])
+        ave_len = input_shape[axis]//out_num
+        slice_point = [ave_len*i for i in range(1,out_num)]
+    
     # make slice point tensor
     axis_np = np.array([axis],dtype=np.int64)
     axis_tensor_name = "Slice_axis_"+str(onnx_maker.infer_blob_idx)
     onnx_maker.infer_blob_idx += 1
     axis_tensor = helper.make_tensor(name=axis_tensor_name, data_type=TensorProto.DataType.INT64, dims=axis_np.shape, vals=axis_np)
-    slice_point = [0] + slice_point + input_shape[1:2]
+    slice_point = [0] + slice_point + input_shape[axis:axis+1]
     for i, point in enumerate(slice_point):
         tensor_slice_point_name = "Slice_point"+str(i)+"_"+str(onnx_maker.infer_blob_idx)
         onnx_maker.infer_blob_idx += 1
@@ -342,3 +360,17 @@ def make_Permute(op):
 
     out = helper.make_tensor_value_info(op["top"][0], TensorProto.FLOAT, None)
     return [node_transpose], [out]
+
+@onnx_maker.register
+def make_Unsqueeze(op):
+    axes_np = np.array(list(op["arg"][0].v_i), dtype=np.int32)
+    axes_tensor_name =  "Axes_" + str(onnx_maker.infer_blob_idx)
+    onnx_maker.infer_blob_idx += 1
+    axes_tensor = helper.make_tensor(name=axes_tensor_name, data_type=TensorProto.DataType.INT64, dims=axes_np.shape, vals=axes_np)
+    
+    node_unsqueeze = helper.make_node("Unsqueeze", inputs=op["bottom"] + [axes_tensor_name], outputs=op["top"], name=op["name"])
+
+    onnx_maker.w_blobs[axes_tensor_name] = axes_tensor
+
+    out = helper.make_tensor_value_info(op["top"][0], TensorProto.FLOAT, None)
+    return [node_unsqueeze], [out]
